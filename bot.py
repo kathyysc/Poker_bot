@@ -3,7 +3,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 DB_FILE = "poker_records.db"
 
@@ -124,4 +124,77 @@ async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     df = pd.read_sql_query(f"SELECT * FROM records WHERE game_id = ? AND action != 'NEW_GAME'", sqlite3.connect(DB_FILE), params=(game_id,))
     user_df = df[df['user_id'] == update.effective_user.id]
-    total_in = user_df[user_df['action'].isin(['BUY_IN', 'ADD_CHIP'])]['amount'].sum
+    total_in = user_df[user_df['action'].isin(['BUY_IN', 'ADD_CHIP'])]['amount'].sum()
+    total_out = user_df[user_df['action'] == 'CASH_OUT')]['amount'].sum()
+    profit = total_out - total_in
+
+    await update.message.reply_text(f"✅ 離場帶走 **{amount}**\n💰 淨輸贏：**{profit:+}**", parse_mode='Markdown')
+
+async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    game_id = get_current_game_id()
+    if not game_id: 
+        await update.message.reply_text("❌ 尚未開局")
+        return
+    df = pd.read_sql_query(f"SELECT * FROM records WHERE game_id = ? AND action != 'NEW_GAME'", sqlite3.connect(DB_FILE), params=(game_id,))
+    user_df = df[df['user_id'] == update.effective_user.id]
+    if user_df.empty:
+        await update.message.reply_text("您尚未入場")
+        return
+    total_in = user_df[user_df['action'].isin(['BUY_IN', 'ADD_CHIP'])]['amount'].sum()
+    total_out = user_df[user_df['action'] == 'CASH_OUT']]['amount'].sum()
+    profit = total_out - total_in
+    await update.message.reply_text(f"👤 **{update.effective_user.full_name}**\n入金：{total_in}\n出金：{total_out}\n淨輸贏：**{profit:+}**", parse_mode='Markdown')
+
+async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    game_id = get_current_game_id()
+    if not game_id: 
+        await update.message.reply_text("❌ 尚未開局")
+        return
+    df = pd.read_sql_query(f"SELECT * FROM records WHERE game_id = ? AND action != 'NEW_GAME'", sqlite3.connect(DB_FILE), params=(game_id,))
+    if df.empty:
+        await update.message.reply_text("無記錄")
+        return
+    lines = []
+    for uid in df['user_id'].unique():
+        u = df[df['user_id'] == uid].iloc[0]
+        tin = df[(df['user_id'] == uid) & (df['action'].isin(['BUY_IN', 'ADD_CHIP']))]['amount'].sum()
+        tout = df[(df['user_id'] == uid) & (df['action'] == 'CASH_OUT')]['amount'].sum()
+        profit = tout - tin
+        status = "在場" if tout == 0 else "離場"
+        lines.append(f"{u['username']}：{tin}→{tout}（{profit:+}）[{status}]")
+    await update.message.reply_text(f"🎲 **總覽**\n" + "\n".join(lines), parse_mode='Markdown')
+
+async def export_csv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ 僅場主可匯出")
+        return
+    game_id = get_current_game_id()
+    if not game_id: 
+        await update.message.reply_text("❌ 尚未開局")
+        return
+    df = pd.read_sql_query(f"SELECT * FROM records WHERE game_id = ? AND action != 'NEW_GAME'", sqlite3.connect(DB_FILE), params=(game_id,))
+    if df.empty:
+        await update.message.reply_text("無資料")
+        return
+    csv_file = f"game_{game_id}.csv"
+    df.to_csv(csv_file, index=False, encoding='utf-8-sig')
+    await update.message.reply_document(open(csv_file, 'rb'), filename=csv_file)
+    os.remove(csv_file)
+
+async def main():
+    init_db()
+    TOKEN = "8468464630:AAESwrwK91z_uTh3clWoW4Hwuug4zeHpeoU"
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("newgame", newgame))
+    app.add_handler(CommandHandler("join", join))
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("leave", leave))
+    app.add_handler(CommandHandler("me", me))
+    app.add_handler(CommandHandler("summary", summary))
+    app.add_handler(CommandHandler("export", export_csv))
+    print("德州撲克記帳 Bot 啟動中...")
+    await app.run_polling()
+
+if __name__ == '__main__':
+    import asyncio
+    asyncio.run(main())
