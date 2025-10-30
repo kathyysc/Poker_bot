@@ -194,11 +194,12 @@ async def main():
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("export", export_csv))
     print("德州撲克記帳 Bot 啟動中...")
-    try:
-        await app.run_polling(allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        print(f"Bot 錯誤：{e}")
-        await asyncio.sleep(5)
+    while True:  # 永久循環，防止任何退出
+        try:
+            await app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+        except Exception as e:
+            print(f"Bot 錯誤：{e}，5 秒後重啟...")
+            await asyncio.sleep(5)
 
 if __name__ == '__main__':
     asyncio.run(main())
